@@ -1,0 +1,4 @@
+# Netlify secret scanning treats NEXT_PUBLIC_* env values as secrets when they appear in build output.
+# Supabase public values are intentionally exposed in client bundles.
+[build.environment]
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY"
