@@ -1,5 +1,24 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { requireGlobalAdmin } from '@/lib/requireGlobalAdmin'
+
+const VALID_ROLES = ['owner', 'accountant', 'sales', 'admin'] as const
+
+async function findUserByEmail(email: string) {
+  const normalizedEmail = email.toLowerCase()
+  let page = 1
+
+  while (true) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 100 })
+    if (error) throw error
+
+    const user = data.users.find((candidate) => candidate.email?.toLowerCase() === normalizedEmail)
+    if (user) return user
+    if (!data.nextPage) return null
+
+    page = data.nextPage
+  }
+}
 
 /**
  * POST /api/admin/inventory-users/invite
@@ -8,6 +27,9 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export async function POST(request: Request) {
   try {
+    const unauthorized = await requireGlobalAdmin(request)
+    if (unauthorized) return unauthorized
+
     const body = await request.json()
     const { email, tenantId, role, userName } = body
 
@@ -25,28 +47,26 @@ export async function POST(request: Request) {
     }
 
     // Validate role
-    const validRoles = ['owner', 'accountant', 'sales', 'admin']
-    if (!validRoles.includes(role)) {
+    if (!(VALID_ROLES as readonly string[]).includes(role)) {
       return NextResponse.json(
-        { error: `Invalid role. Must be one of: ${validRoles.join(', ')}` },
+        { error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` },
         { status: 400 }
       )
     }
 
     // Check if user exists
     let userId: string | null = null
-    const { data: existingUsers } = await supabaseAdmin.auth.admin.listUsers()
-
-    const existingUser = existingUsers?.users.find((u) => u.email === email)
+    const normalizedEmail = email.toLowerCase()
+    const existingUser = await findUserByEmail(normalizedEmail)
     if (existingUser) {
       userId = existingUser.id
     } else {
       // Create new user
       const { data: newUser, error: createError } = await supabaseAdmin.auth.admin.createUser({
-        email,
+        email: normalizedEmail,
         email_confirm: true,
         user_metadata: {
-          full_name: userName || email.split('@')[0],
+          full_name: userName || normalizedEmail.split('@')[0],
         },
       })
 
@@ -71,7 +91,7 @@ export async function POST(request: Request) {
         {
           user_id: userId,
           tenant_id: tenantId,
-          user_email: email,
+          user_email: normalizedEmail,
           role,
           active: true,
           created_by: tenantId, // Admin system as creator
@@ -91,7 +111,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({
       success: true,
-      message: `User ${email} invited with role '${role}'`,
+      message: `User ${normalizedEmail} invited with role '${role}'`,
       userId,
       data,
     })

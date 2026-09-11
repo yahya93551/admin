@@ -1,12 +1,15 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import type { TenantRole } from '@/types'
+
+type ManageableRole = Exclude<TenantRole, 'super_admin'>
 
 interface InventoryUser {
   id: string
   user_id: string
   user_email: string
-  role: 'owner' | 'accountant' | 'sales' | 'admin'
+  role: ManageableRole
   active: boolean
   created_at: string
   tenant_id: string
@@ -14,12 +17,12 @@ interface InventoryUser {
 
 interface InviteFormData {
   email: string
-  role: 'owner' | 'accountant' | 'sales' | 'admin'
+  role: ManageableRole
   userName: string
   tenantId: string
 }
 
-const VALID_ROLES = ['owner', 'accountant', 'sales', 'admin']
+const VALID_ROLES: ManageableRole[] = ['owner', 'accountant', 'sales', 'admin']
 
 export default function InventoryUsersManager() {
   const [users, setUsers] = useState<InventoryUser[]>([])
@@ -248,7 +251,7 @@ export default function InventoryUsersManager() {
             <label className="block text-sm font-medium mb-1">Role</label>
             <select
               value={formData.role}
-              onChange={(e) => setFormData({ ...formData, role: e.target.value as any })}
+              onChange={(e) => setFormData({ ...formData, role: e.target.value as ManageableRole })}
               className="w-full px-3 py-2 border rounded-lg"
             >
               {VALID_ROLES.map((role) => (

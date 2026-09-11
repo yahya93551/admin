@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { requireGlobalAdmin } from '@/lib/requireGlobalAdmin'
 
 async function getUserEmail(userId: string) {
   try {
@@ -11,14 +12,39 @@ async function getUserEmail(userId: string) {
   }
 }
 
+const VALID_SUBSCRIPTION_DURATIONS = [1, 3, 6, 12] as const
+
+function normalizeSubscriptionDurationMonths(value: unknown) {
+  const parsed = typeof value === 'string' ? Number(value) : value
+  if (typeof parsed !== 'number' || !Number.isFinite(parsed)) return 1
+
+  return VALID_SUBSCRIPTION_DURATIONS.includes(
+    parsed as (typeof VALID_SUBSCRIPTION_DURATIONS)[number],
+  )
+    ? parsed
+    : 1
+}
+
+function getExtensionBaseDate(value: unknown, now: Date) {
+  if (typeof value !== 'string') return now
+
+  const existingActiveUntil = new Date(value)
+  return Number.isNaN(existingActiveUntil.getTime()) || existingActiveUntil <= now
+    ? now
+    : existingActiveUntil
+}
+
 // GET: list all subscription records and pending requests
 // POST: { action: 'approve'|'decline', id: string }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const unauthorized = await requireGlobalAdmin(request)
+    if (unauthorized) return unauthorized
+
     const { data, error } = await supabaseAdmin
       .from('tenant_subscriptions')
-      .select('id, tenant_id, status, monthly_fee, requested_at, approved_at, approved_by, notes, created_at, updated_at')
+      .select('*')
       .order('requested_at', { ascending: false })
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -47,6 +73,9 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const unauthorized = await requireGlobalAdmin(request)
+    if (unauthorized) return unauthorized
+
     const body = await request.json()
     const { action, id } = body
     if (!action || !id) {
@@ -57,6 +86,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid action' }, { status: 400 })
     }
 
+    const { data: subscription, error: subscriptionError } = await supabaseAdmin
+      .from('tenant_subscriptions')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle()
+
+    if (subscriptionError) return NextResponse.json({ error: subscriptionError.message }, { status: 500 })
+    if (!subscription) return NextResponse.json({ error: 'Subscription request not found' }, { status: 404 })
+
     const newStatus = action === 'approve' ? 'active' : 'declined'
     const updateData: Record<string, unknown> = {
       status: newStatus,
@@ -65,23 +103,37 @@ export async function POST(request: Request) {
 
     if (action === 'approve') {
       const now = new Date()
-      const nextBillingDate = new Date(now)
-      nextBillingDate.setDate(nextBillingDate.getDate() + 30)
-      const activeUntil = new Date(now)
-      activeUntil.setMonth(activeUntil.getMonth() + 1)
+      const durationMonths = normalizeSubscriptionDurationMonths(subscription.subscription_duration_months)
+      const extensionBaseDate = getExtensionBaseDate(subscription.active_until, now)
+      const activeUntil = new Date(extensionBaseDate)
+      activeUntil.setMonth(activeUntil.getMonth() + durationMonths)
 
       updateData.billing_date = now.toISOString().split('T')[0]
-      updateData.next_billing_date = nextBillingDate.toISOString().split('T')[0]
+      updateData.next_billing_date = activeUntil.toISOString().split('T')[0]
       updateData.active_until = activeUntil.toISOString()
       updateData.approved_at = now.toISOString()
+      updateData.subscription_duration_months = durationMonths
     }
 
-    const { data, error } = await supabaseAdmin
+    let { data, error } = await supabaseAdmin
       .from('tenant_subscriptions')
       .update(updateData)
       .eq('id', id)
-      .select('id, tenant_id, status, monthly_fee, requested_at, approved_at, approved_by, notes, billing_date, next_billing_date, active_until, created_at, updated_at')
+      .select('*')
       .single()
+
+    if (error && action === 'approve' && error.message.toLowerCase().includes('subscription_duration_months')) {
+      const fallbackUpdate = { ...updateData }
+      delete fallbackUpdate.subscription_duration_months
+      const fallbackResult = await supabaseAdmin
+        .from('tenant_subscriptions')
+        .update(fallbackUpdate)
+        .eq('id', id)
+        .select('*')
+        .single()
+      data = fallbackResult.data
+      error = fallbackResult.error
+    }
 
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     if (!data) {

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import InventoryUsersManager from '@/components/InventoryUsersManager'
 import SubscriptionRequestsManager from '@/components/SubscriptionRequestsManager'
-import type { ActivityLog, TenantContext, TenantMember } from '@/types'
+import type { ActivityLog, TenantContext, TenantMember, UserActivitySummary } from '@/types'
 
 interface AuthUser {
   id: string
@@ -25,6 +25,7 @@ export default function AdminDashboard() {
   const displayedUsers = useMemo(() => (authUsers.length > 0 ? authUsers : users), [authUsers, users])
   const [logs, setLogs] = useState<ActivityLog[]>([])
   const [userLogs, setUserLogs] = useState<ActivityLog[]>([])
+  const [topUsers, setTopUsers] = useState<UserActivitySummary[]>([])
   const [selectedUser, setSelectedUser] = useState<TenantMember | AuthUser | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -82,6 +83,13 @@ export default function AdminDashboard() {
       setError(null)
       try {
         await Promise.all([fetchAllUsers(), fetchAuthUsers(), fetchMembers()])
+        await fetchActivitySummary().catch((error) => {
+          if (error instanceof Error && error.message.includes('schema cache')) {
+            setTopUsers([])
+            return
+          }
+          throw error
+        })
         await fetchActivityLogs().catch((error) => {
           if (error instanceof Error && error.message.includes('schema cache')) {
             setMessage('Activity logs are unavailable because the activity_logs table does not exist.')
@@ -131,6 +139,16 @@ export default function AdminDashboard() {
       }
       throw error
     }
+  }
+
+  const fetchActivitySummary = async () => {
+    const response = await fetch('/api/admin/activity-summary')
+    if (!response.ok) {
+      const json = await response.json()
+      throw new Error(json.error || 'Failed to load activity summary')
+    }
+    const json = await response.json()
+    setTopUsers(json.users ?? [])
   }
 
   const fetchAllUsers = async () => {
@@ -288,6 +306,31 @@ export default function AdminDashboard() {
 
           {activeSection === 'overview' && (
             <div className="space-y-6">
+              {tenant.isGlobalAdmin && <SubscriptionRequestsManager />}
+
+              {tenant.isGlobalAdmin && topUsers.length > 0 && (
+                <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900">Most active users</p>
+                      <p className="text-sm text-slate-500">Ranked by recorded activity across the system.</p>
+                    </div>
+                    <span className="text-xs text-slate-500">Top {topUsers.length}</span>
+                  </div>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    {topUsers.map((user, index) => (
+                      <div key={user.user_id} className="rounded-2xl bg-slate-50 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">#{index + 1}</p>
+                        <p className="mt-2 truncate text-sm font-semibold text-slate-900" title={user.user_email ?? user.user_id}>
+                          {user.user_email || user.user_id}
+                        </p>
+                        <p className="mt-1 text-xs text-slate-500">{user.activity_count} recorded actions</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
                   <p className="text-sm text-slate-500">{tenant.isGlobalAdmin ? 'All users' : 'Team members'}</p>
@@ -491,9 +534,20 @@ export default function AdminDashboard() {
                       <div>
                         <p className="text-sm font-semibold text-slate-900">{log.action}</p>
                         <p className="text-xs text-slate-500">Entity: {log.entity}</p>
+                        <p className="text-xs text-slate-500">
+                          Performed by: {log.performed_by_email || log.performed_by}
+                        </p>
                       </div>
                       <span className="text-xs text-slate-500">{new Date(log.created_at).toLocaleString()}</span>
                     </div>
+                    {(log.entity_id || log.endpoint || log.http_method || log.status_code) && (
+                      <div className="mt-3 grid gap-1 text-xs text-slate-500 sm:grid-cols-2">
+                        {log.entity_id && <span>Entity ID: {log.entity_id}</span>}
+                        {log.http_method && <span>Method: {log.http_method}</span>}
+                        {log.endpoint && <span>Endpoint: {log.endpoint}</span>}
+                        {typeof log.status_code === 'number' && <span>Status: {log.status_code}</span>}
+                      </div>
+                    )}
                     {log.details && (
                       <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-2xl bg-white p-3 text-xs text-slate-600">
                         {JSON.stringify(log.details, null, 2)}

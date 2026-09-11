@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
 import { supabaseAdmin } from '@/lib/supabaseAdmin'
+import { requireGlobalAdmin } from '@/lib/requireGlobalAdmin'
+
+const VALID_ROLES = ['owner', 'accountant', 'sales', 'admin'] as const
 
 /**
  * GET /api/admin/inventory-users - List all tenant members from inventory system
@@ -8,6 +11,9 @@ import { supabaseAdmin } from '@/lib/supabaseAdmin'
 
 export async function GET(request: Request) {
   try {
+    const unauthorized = await requireGlobalAdmin(request)
+    if (unauthorized) return unauthorized
+
     // Get all users with their tenant memberships
     const { data: tenantMembers, error } = await supabaseAdmin
       .from('tenant_members')
@@ -32,6 +38,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const unauthorized = await requireGlobalAdmin(request)
+    if (unauthorized) return unauthorized
+
     const body = await request.json()
     const { action, userId, tenantId, role } = body
 
@@ -53,10 +62,9 @@ export async function POST(request: Request) {
       }
 
       // Validate role
-      const validRoles = ['owner', 'accountant', 'sales', 'admin']
-      if (!validRoles.includes(role)) {
+      if (!(VALID_ROLES as readonly string[]).includes(role)) {
         return NextResponse.json(
-          { error: `Invalid role. Must be one of: ${validRoles.join(', ')}` },
+          { error: `Invalid role. Must be one of: ${VALID_ROLES.join(', ')}` },
           { status: 400 }
         )
       }
